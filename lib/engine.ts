@@ -16,6 +16,8 @@ import { JNILibraryWatcher } from ".";
 
 
 export function run (callbackManager: JNICallbackManager): void {
+    console.log('Customized jnitrace-engine!');
+
     const JNI_ENV_INDEX = 0;
     const JAVA_VM_INDEX = 0;
     const LIB_TRACK_FIRST_INDEX = 0;
@@ -135,6 +137,33 @@ export function run (callbackManager: JNICallbackManager): void {
             }
         });
     }
+
+    function hook_dlopen(onSoLoadedCallback:Function) {
+        var dlopen = Module.findExportByName(null, "dlopen");
+        if (dlopen != null) {
+            Interceptor.attach(dlopen, {
+                onEnter: function (args) {
+                    this.soName = args[0].readCString();
+                },
+                onLeave: function (retval) {
+                    onSoLoadedCallback(this.soName,retval);
+                }
+            });
+        }
+    
+        //第二种方式（针对新系统版本）
+        var android_dlopen_ext = Module.findExportByName(null, "android_dlopen_ext");
+        if (android_dlopen_ext != null) {
+            Interceptor.attach(android_dlopen_ext, {
+                onEnter: function (args) {
+                   this.soName = args[0].readCString();
+                },
+                onLeave: function (retval) {
+                    onSoLoadedCallback(this.soName,retval);
+                }
+            });
+        }
+    }
     
     const dlopenRef = Module.findExportByName(null, "dlopen");
     const dlsymRef = Module.findExportByName(null, "dlsym");
@@ -144,22 +173,16 @@ export function run (callbackManager: JNICallbackManager): void {
         const HANDLE_INDEX = 0;
     
         const dlopen = new NativeFunction(dlopenRef, "pointer", ["pointer", "int"]);
-        Interceptor.replace(dlopen, new NativeCallback((filename: NativePointer, mode: number): NativeReturnValue => {
-            const path = filename.readCString();
-            const retval = dlopen(filename, mode);
-    
+        // replace会导致卡死，替换成attach
+        hook_dlopen(function(path:string,retval:NativePointer){
             if (path !== null) {
                 if (checkLibrary(path)) {
-                    // eslint-disable-next-line @typescript-eslint/no-base-to-string
                     trackedLibs.set(retval.toString(), true);
                 } else {
-                    // eslint-disable-next-line @typescript-eslint/no-base-to-string
                     libBlacklist.set(retval.toString(), true);
                 }
             }
-
-            return retval;
-        }, "pointer", ["pointer", "int"]));
+        });
     
         const dlsym = new NativeFunction(dlsymRef, "pointer", ["pointer", "pointer"]);
         Interceptor.attach(dlsym, {
